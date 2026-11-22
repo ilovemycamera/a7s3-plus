@@ -1,0 +1,74 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 400" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0d1117"/>
+      <stop offset="100%" stop-color="#151b23"/>
+    </linearGradient>
+    <linearGradient id="ogFill" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#ff6b2b" stop-opacity="0.24"/>
+      <stop offset="50%" stop-color="#ff6b2b" stop-opacity="0.08"/>
+      <stop offset="100%" stop-color="#ff6b2b" stop-opacity="0.24"/>
+    </linearGradient>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 1 L 9 5 L 0 9 z" fill="#ff6b2b"/>
+    </marker>
+  </defs>
+
+  <!-- Outer card -->
+  <rect x="4" y="4" width="952" height="392" rx="14" fill="url(#bg)" stroke="#30363d" stroke-width="1.5"/>
+
+  <!-- Header -->
+  <text x="36" y="42" fill="#f0f6fc" font-size="19" font-weight="700">a7s3-plus — Full-Sensor 3:2 Open Gate Signal Chain (ILCE-7SM3 FW 5.01)</text>
+  <text x="36" y="64" fill="#8b949e" font-size="12.5">Unlocks all 2,826 vertical lines of the 12.1 MP IMX510 full-frame sensor (+18.5% height over stock 16:9 4K)</text>
+
+  <!-- Panel 1: IMX510 Sensor Readout -->
+  <text x="200" y="98" fill="#c9d1d9" font-size="13" font-weight="600" text-anchor="middle">1. IMX510 Sensor Readout (CP)</text>
+
+  <!-- 3:2 Full Sensor Box: 300 x 200 -->
+  <rect x="50" y="114" width="300" height="200" rx="4" fill="url(#ogFill)" stroke="#ff6b2b" stroke-width="2"/>
+  <text x="200" y="132" fill="#ffa657" font-size="11" font-weight="600" text-anchor="middle">+221 lines top (unlocked)</text>
+  <text x="200" y="306" fill="#ffa657" font-size="11" font-weight="600" text-anchor="middle">+221 lines bottom (unlocked)</text>
+
+  <!-- 16:9 Stock Crop Box: 300 x 168.7 -->
+  <rect x="50" y="129.6" width="300" height="168.8" fill="#0d1117" fill-opacity="0.55" stroke="#58a6ff" stroke-width="1.5" stroke-dasharray="6 4"/>
+
+  <!-- Center crosshair -->
+  <line x1="192" y1="214" x2="208" y2="214" stroke="#484f58" stroke-width="1"/>
+  <line x1="200" y1="206" x2="200" y2="222" stroke="#484f58" stroke-width="1"/>
+
+  <text x="200" y="198" fill="#f0f6fc" font-size="15" font-weight="700" text-anchor="middle">4240 × 2826 (3:2)</text>
+  <text x="200" y="218" fill="#ffa657" font-size="12" font-weight="600" text-anchor="middle">Open Gate • 35.6 × 23.8 mm • 11.98 MP</text>
+  <text x="200" y="246" fill="#58a6ff" font-size="11.5" text-anchor="middle">Stock 16:9 Crop: 4240 × 2384 (10.11 MP)</text>
+
+  <text x="200" y="340" fill="#8b949e" font-size="11.5" text-anchor="middle">SPI rows + Dual CLV Stripe Scaler</text>
+  <text x="200" y="357" fill="#8b949e" font-size="11.5" text-anchor="middle">patched in CP RAM via /dev/pcidma</text>
+
+  <!-- Arrow 1 -> 2 -->
+  <line x1="364" y1="214" x2="416" y2="214" stroke="#ff6b2b" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- Panel 2: Native 3840x2560 Hardware Encode -->
+  <text x="530" y="98" fill="#c9d1d9" font-size="13" font-weight="600" text-anchor="middle">2. Native Encode (AV / Imola2)</text>
+  <rect x="430" y="138" width="200" height="152" rx="6" fill="#161b22" stroke="#30363d" stroke-width="1.5"/>
+  <rect x="442" y="148" width="176" height="117" rx="3" fill="#1f2937" stroke="#8b949e" stroke-width="1.2"/>
+  <text x="530" y="190" fill="#f0f6fc" font-size="14" font-weight="700" text-anchor="middle">3840 × 2560</text>
+  <text x="530" y="210" fill="#79c0ff" font-size="11" text-anchor="middle">10-bit 4:2:2 / 4:2:0 HEVC &amp; AVC</text>
+  <text x="530" y="230" fill="#ffa657" font-size="11" font-weight="600" text-anchor="middle">1:1 Square Pixels (HEVC L6.0)</text>
+  <text x="530" y="250" fill="#8b949e" font-size="10.5" text-anchor="middle">96 MB DMM swap • 2×1280 tiles</text>
+  <text x="530" y="281" fill="#c9d1d9" font-size="10.5" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" text-anchor="middle">coded = 3840 × 2560</text>
+
+  <text x="530" y="340" fill="#8b949e" font-size="11.5" text-anchor="middle">True square-pixel 3:2 bitstream</text>
+  <text x="530" y="357" fill="#8b949e" font-size="11.5" text-anchor="middle">encoded directly by Imola2 silicon</text>
+
+  <!-- Arrow 2 -> 3 -->
+  <line x1="644" y1="214" x2="696" y2="214" stroke="#ff6b2b" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- Panel 3: Native 3:2 Output -->
+  <text x="810" y="98" fill="#c9d1d9" font-size="13" font-weight="600" text-anchor="middle">3. Native 3:2 Output (MP4)</text>
+  <rect x="710" y="147" width="200" height="133.3" rx="4" fill="url(#ogFill)" stroke="#3fb950" stroke-width="2"/>
+  <text x="810" y="198" fill="#f0f6fc" font-size="15" font-weight="700" text-anchor="middle">3840 × 2560</text>
+  <text x="810" y="218" fill="#3fb950" font-size="12" font-weight="600" text-anchor="middle">True 3:2 • 1:1 SAR</text>
+  <text x="810" y="242" fill="#c9d1d9" font-size="11" text-anchor="middle">Zero desqueeze • Full rtmd gyro</text>
+
+  <text x="810" y="340" fill="#8b949e" font-size="11.5" text-anchor="middle">DaVinci Resolve • Premiere Pro</text>
+  <text x="810" y="357" fill="#8b949e" font-size="11.5" text-anchor="middle">Final Cut Pro • QuickTime</text>
+</svg>

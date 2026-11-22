@@ -1,0 +1,80 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 360" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif">
+  <defs>
+    <linearGradient id="bg2" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0d1117"/>
+      <stop offset="100%" stop-color="#151b23"/>
+    </linearGradient>
+    <marker id="arrBlue" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 1 L 9 5 L 0 9 z" fill="#58a6ff"/>
+    </marker>
+    <marker id="arrOrange" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 1 L 9 5 L 0 9 z" fill="#ff6b2b"/>
+    </marker>
+  </defs>
+
+  <rect x="4" y="4" width="952" height="352" rx="14" fill="url(#bg2)" stroke="#30363d" stroke-width="1.5"/>
+
+  <text x="36" y="40" fill="#f0f6fc" font-size="18" font-weight="700">Sony Bionz XR Tri-Domain Architecture &amp; a7s3-plus In-RAM Hooks</text>
+  <text x="36" y="61" fill="#8b949e" font-size="12">All patches apply strictly to volatile RAM — power-cycling the camera restores 100% stock firmware</text>
+
+  <!-- Domain 1: CP -->
+  <rect x="34" y="84" width="268" height="244" rx="10" fill="#161b22" stroke="#f0883e" stroke-width="1.5"/>
+  <text x="52" y="112" fill="#ffa657" font-size="14" font-weight="700">CP Domain (Camera Processor)</text>
+  <text x="52" y="130" fill="#8b949e" font-size="11.5" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">cpapp-b.bin • ARM32 Thumb-2 RTOS</text>
+
+  <rect x="50" y="146" width="236" height="46" rx="6" fill="#0d1117" stroke="#30363d"/>
+  <text x="62" y="166" fill="#f0f6fc" font-size="12" font-weight="600">IMX510 Sensor SPI Registers</text>
+  <text x="62" y="182" fill="#8b949e" font-size="11">Unlocks full 4240 × 2826 readout window</text>
+
+  <rect x="50" y="202" width="236" height="52" rx="6" fill="#0d1117" stroke="#30363d"/>
+  <text x="62" y="222" fill="#f0f6fc" font-size="12" font-weight="600">Dual-ISP CLV &amp; VEF Scalers</text>
+  <text x="62" y="238" fill="#8b949e" font-size="11">0820_L/R_CLV + Movie VEF → 3840×2560</text>
+
+  <rect x="50" y="264" width="236" height="48" rx="6" fill="#0d1117" stroke="#30363d"/>
+  <text x="62" y="284" fill="#f0f6fc" font-size="12" font-weight="600">Crop &amp; Sync Timing Tables</text>
+  <text x="62" y="300" fill="#8b949e" font-size="11">DrvParam_10, aspect_map, syncrccalc</text>
+
+  <!-- Domain 2: AV / BB -->
+  <rect x="346" y="84" width="268" height="244" rx="10" fill="#161b22" stroke="#58a6ff" stroke-width="1.5"/>
+  <text x="364" y="112" fill="#79c0ff" font-size="14" font-weight="700">AV / BB Domain (Media Co-CPU)</text>
+  <text x="364" y="130" fill="#8b949e" font-size="11.5" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">av-cam.bin • DDR 0x401000000</text>
+
+  <rect x="362" y="146" width="236" height="52" rx="6" fill="#0d1117" stroke="#30363d"/>
+  <text x="374" y="166" fill="#f0f6fc" font-size="12" font-weight="600">VDT (Video Dataflow Pipe)</text>
+  <text x="374" y="182" fill="#8b949e" font-size="11">3840×2560 PCIe ingest &amp; 96 MB DMM</text>
+
+  <rect x="362" y="210" width="236" height="56" rx="6" fill="#0d1117" stroke="#30363d"/>
+  <text x="374" y="230" fill="#f0f6fc" font-size="12" font-weight="600">Imola2 HEVC / H.264 Silicon</text>
+  <text x="374" y="246" fill="#ffa657" font-size="11">Native 3840×2560 • 1:1 SAR • L6.0</text>
+  <text x="374" y="260" fill="#8b949e" font-size="10.5">Symmetric 2 × 3840×1280 tile split</text>
+
+  <rect x="362" y="276" width="236" height="36" rx="6" fill="#0d1117" stroke="#30363d"/>
+  <text x="374" y="298" fill="#8b949e" font-size="11">Patched from Linux via /dev/mem O_SYNC</text>
+
+  <!-- Domain 3: MP Linux -->
+  <rect x="658" y="84" width="268" height="244" rx="10" fill="#161b22" stroke="#3fb950" stroke-width="1.5"/>
+  <text x="676" y="112" fill="#56d364" font-size="14" font-weight="700">MP Domain (Main Linux SoC)</text>
+  <text x="676" y="130" fill="#8b949e" font-size="11.5" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">im.elf • ARM64 Linux 4.9</text>
+
+  <rect x="674" y="146" width="236" height="52" rx="6" fill="#0d1117" stroke="#30363d"/>
+  <text x="686" y="166" fill="#f0f6fc" font-size="12" font-weight="600">appFw.so + UXC Menu Daemon</text>
+  <text x="686" y="182" fill="#8b949e" font-size="11">Native Open Gate toggle &amp; Cinema unlocks</text>
+
+  <rect x="674" y="208" width="236" height="48" rx="6" fill="#0d1117" stroke="#30363d"/>
+  <text x="686" y="228" fill="#f0f6fc" font-size="12" font-weight="600">libmpr.so MP4 Muxer</text>
+  <text x="686" y="244" fill="#ffa657" font-size="11">Native coded 3840×2560 (1:1 SAR)</text>
+
+  <rect x="674" y="266" width="236" height="46" rx="6" fill="#0d1117" stroke="#30363d"/>
+  <text x="686" y="285" fill="#f0f6fc" font-size="12" font-weight="600">FBRM OSD Framebuffer + Input</text>
+  <text x="686" y="301" fill="#8b949e" font-size="11">1993 DOOM (E1M1) w/ buttons &amp; wheels</text>
+
+  <!-- Interconnect arrows -->
+  <line x1="302" y1="172" x2="344" y2="172" stroke="#58a6ff" stroke-width="2" marker-end="url(#arrBlue)"/>
+  <text x="323" y="163" fill="#58a6ff" font-size="10" font-weight="600" text-anchor="middle">PCIe</text>
+
+  <line x1="658" y1="292" x2="616" y2="292" stroke="#ff6b2b" stroke-width="2" marker-end="url(#arrOrange)"/>
+  <text x="637" y="283" fill="#ffa657" font-size="10" font-weight="600" text-anchor="middle">/dev/mem</text>
+
+  <path d="M 792 328 L 792 344 L 168 344 L 168 330" fill="none" stroke="#ff6b2b" stroke-width="1.8" stroke-dasharray="5 3" marker-end="url(#arrOrange)"/>
+  <text x="480" y="340" fill="#ffa657" font-size="10.5" font-weight="600" text-anchor="middle">Cache-Coherent PCIe DMA (/dev/pcidma + OSAL UIPC 0x928a0770)</text>
+</svg>

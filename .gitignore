@@ -1,0 +1,24 @@
+# Python & local environment
+.venv/
+vendor/
+__pycache__/
+*.py[cod]
+
+# User-supplied WAD files (never commit copyrighted game assets)
+*.wad
+*.WAD
+runtime/doom1.wad.gz
+
+# Runtime & diagnostic logs generated on host
+analysis/last_load_output.txt
+analysis/coldboot_check.log
+analysis/coldboot_history.log
+analysis/logs_2560/
+analysis/jit-last-run/
+analysis/bench-last-run/
+
+# Temporary build outputs & OS metadata
+runtime/doom_build/
+runtime/*.o
+runtime/doom_a7s3.so
+.DS_Store
