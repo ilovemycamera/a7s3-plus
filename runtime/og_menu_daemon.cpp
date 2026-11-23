@@ -143,6 +143,8 @@ static const Patch4 kCpSurgicalVef2560[] = {
 
 static uint8_t g_saved_hevc_lvl[320];
 static int g_saved_hevc_lvl_valid = 0;
+static uint16_t g_saved_ddx_bidx[2][2] = {{9, 10}, {9, 10}};
+static int g_saved_ddx_valid[2][2] = {{0, 0}, {0, 0}};
 
 static char maps_buf[131072];
 static long g_log_fd = -1;
@@ -158,7 +160,7 @@ static volatile int g_last_mode = 1;
 static volatile int g_applied_hw_mode = 0;
 static volatile uint32_t g_was_usb = 0;
 static int g_worker_started = 0;
-static const uint32_t kDaemonTokenV5 = 0x4f474d13U;
+static const uint32_t kDaemonTokenV5 = 0x4f474d17U;
 extern "C" {
 __attribute__((visibility("hidden"))) uint64_t g_orig_3519da4 = 0;
 __attribute__((visibility("hidden"))) int call_orig_3519d94(uint32_t dst_id, void *msg, uint32_t size, void *reply, uint32_t reply_size);
@@ -508,6 +510,9 @@ extern "C" int hook_3519d94(uint32_t dst_id, uint8_t *msg, uint32_t size, void *
             }
         } else if (cmd == 0x14c && size == 0x28) {
             uint8_t out_id = msg[8];
+            uint8_t fit_mode = msg[9];
+            uint16_t sw = *(uint16_t *)(msg + 0x10);
+            uint16_t sh = *(uint16_t *)(msg + 0x12);
             uint16_t dx = *(uint16_t *)(msg + 0x14);
             uint16_t dy = *(uint16_t *)(msg + 0x16);
             uint16_t dw = *(uint16_t *)(msg + 0x18);
@@ -515,44 +520,62 @@ extern "C" int hook_3519d94(uint32_t dst_id, uint8_t *msg, uint32_t size, void *
             orig_dy = dy;
             orig_dw = dw;
             orig_dh = dh;
-            if ((out_id == 1U || out_id == 2U) && dw == 640 && dh > 0 && dh <= 360) {
-                if (og_on && cur_sys != 2U) {
-                    // Explicit manual 3:2 rect (msg[9]=0 -> CP VDF 0x1e5068 obeys dst_rect literally)
-                    msg[9] = 0;
-                    *(uint16_t *)(msg + 0x0c) = 0;
-                    *(uint16_t *)(msg + 0x0e) = 0;
-                    *(uint16_t *)(msg + 0x10) = 640;
-                    *(uint16_t *)(msg + 0x12) = 480;
+            if (og_on && cur_sys != 2U) {
+                if ((out_id == 1U || out_id == 2U) && dw == 640 && dh > 0 && dh <= 360) {
+                    // Explicit manual 3:2 dst rect; ALWAYS preserve Focus Magnifier src crop when fit_mode == 0!
+                    if (fit_mode != 0 || sw == 0 || sh == 0) {
+                        msg[9] = 0;
+                        *(uint16_t *)(msg + 0x0c) = 0;
+                        *(uint16_t *)(msg + 0x0e) = 0;
+                        *(uint16_t *)(msg + 0x10) = 640;
+                        *(uint16_t *)(msg + 0x12) = 480;
+                        msg[0x1e] = 0;
+                        msg[0x1f] = 0;
+                    }
+                    // IMPORTANT: Preserve msg[0x1c] (Dev Aspect = 1) and msg[0x20] (M20 = 3)!
+                    // CP VDF 0x001e9204 drops EVERY live frame ("VDF : PIN Aspect %d, Dev Aspect %d")
+                    // whenever B0A==0 (FocusMag active) && fit_mode==0 && PIN Aspect (1) != msg[0x1c]!
                     *(uint16_t *)(msg + 0x14) = 0;
                     *(uint16_t *)(msg + 0x16) = 26;
                     *(uint16_t *)(msg + 0x18) = 640;
                     *(uint16_t *)(msg + 0x1a) = 428;
-                    msg[0x1c] = 2; // dst_aspect = 3:2
-                    msg[0x1e] = 0;
-                    msg[0x1f] = 0;
-                    if (out_id == 1U) {
-                        volatile uint16_t *lcd_cache = reinterpret_cast<volatile uint16_t *>(g_appfw_base + 0x8a005f8);
-                        lcd_cache[0] = 0;
-                        lcd_cache[1] = 26;
-                        lcd_cache[2] = 640;
-                        lcd_cache[3] = 428;
-                    }
+                    uint64_t cache_off = (out_id == 1U) ? 0x8a005f8ULL : 0x8a005c8ULL;
+                    volatile uint16_t *disp_cache = reinterpret_cast<volatile uint16_t *>(g_appfw_base + cache_off);
+                    disp_cache[0] = 0;
+                    disp_cache[1] = 26;
+                    disp_cache[2] = 640;
+                    disp_cache[3] = 428;
                     fixed = 1;
-                } else if (dh < 360) {
-                    msg[9] = 1;
-                    *(uint16_t *)(msg + 0x14) = 0;
-                    *(uint16_t *)(msg + 0x16) = 60;
-                    *(uint16_t *)(msg + 0x18) = 640;
-                    *(uint16_t *)(msg + 0x1a) = 360;
-                    if (out_id == 1U) {
-                        volatile uint16_t *lcd_cache = reinterpret_cast<volatile uint16_t *>(g_appfw_base + 0x8a005f8);
-                        lcd_cache[0] = 0;
-                        lcd_cache[1] = 60;
-                        lcd_cache[2] = 640;
-                        lcd_cache[3] = 360;
+                } else if (out_id == 4U && fit_mode == 0 && dx == 0 && dy == 0 && dw == 640 && dh == 480) {
+                    // HDMI Focus Magnifier / manual rect: preserve src crop, msg[0x1c] (Dev Aspect=1), and msg[0x20];
+                    // pillarbox dst to true 3:2 (50,0,540,480)
+                    if (sw == 0 || sh == 0) {
+                        *(uint16_t *)(msg + 0x0c) = 0;
+                        *(uint16_t *)(msg + 0x0e) = 0;
+                        *(uint16_t *)(msg + 0x10) = 640;
+                        *(uint16_t *)(msg + 0x12) = 480;
                     }
+                    *(uint16_t *)(msg + 0x14) = 50;
+                    *(uint16_t *)(msg + 0x16) = 0;
+                    *(uint16_t *)(msg + 0x18) = 540;
+                    *(uint16_t *)(msg + 0x1a) = 480;
                     fixed = 1;
                 }
+            } else if ((out_id == 1U || out_id == 2U) && dw == 640 && dh > 0 && dh < 360) {
+                if (fit_mode != 0) {
+                    msg[9] = 1;
+                }
+                *(uint16_t *)(msg + 0x14) = 0;
+                *(uint16_t *)(msg + 0x16) = 60;
+                *(uint16_t *)(msg + 0x18) = 640;
+                *(uint16_t *)(msg + 0x1a) = 360;
+                uint64_t cache_off = (out_id == 1U) ? 0x8a005f8ULL : 0x8a005c8ULL;
+                volatile uint16_t *disp_cache = reinterpret_cast<volatile uint16_t *>(g_appfw_base + cache_off);
+                disp_cache[0] = 0;
+                disp_cache[1] = 60;
+                disp_cache[2] = 640;
+                disp_cache[3] = 360;
+                fixed = 1;
             }
             (void)dx;
         } else if (cmd == 0x147 && size == 0x308) {
@@ -627,7 +650,7 @@ extern "C" int hook_3519d94(uint32_t dst_id, uint8_t *msg, uint32_t size, void *
             }
         }
         int call_rc = call_orig_3519d94(dst_id, msg, size, reply, reply_size);
-        if (cmd == 0x147 || (cmd == 0x16e && fixed) || (cmd == 0x14c && (msg[8] != 7 || fixed))) {
+        if (cmd == 0x147 || cmd == 0x152 || (cmd == 0x16e && fixed) || (cmd == 0x14c && (msg[8] != 7 || fixed))) {
             long vfd = sc4(56, -100, (long)"/tmp/jiritsu/vdf-log.txt", 1 | 64 | 1024, 0644);
             if (vfd >= 0) {
                 write_fd_str(vfd, "SYS=");
@@ -644,12 +667,36 @@ extern "C" int hook_3519d94(uint32_t dst_id, uint8_t *msg, uint32_t size, void *
                     write_fd_str(vfd, ",");
                     write_fd_u32(vfd, orig_b11);
                     write_fd_str(vfd, ") FIXED_DESQ_OFF");
+                } else if (cmd == 0x152 && size == 0x10) {
+                    write_fd_str(vfd, " PK=(");
+                    write_fd_u32(vfd, msg[8]);
+                    write_fd_str(vfd, ",");
+                    write_fd_u32(vfd, msg[9]);
+                    write_fd_str(vfd, ",");
+                    write_fd_u32(vfd, msg[10]);
+                    write_fd_str(vfd, ",");
+                    write_fd_u32(vfd, msg[11]);
+                    write_fd_str(vfd, ")");
                 } else if (cmd == 0x14c && size == 0x28) {
                     write_fd_str(vfd, " OUT=");
                     write_fd_u32(vfd, msg[8]);
                     write_fd_str(vfd, " F=");
                     write_fd_u32(vfd, msg[9]);
-                    write_fd_str(vfd, " DST=(");
+                    write_fd_str(vfd, " B0A=");
+                    write_fd_u32(vfd, msg[0x0a]);
+                    write_fd_str(vfd, " A=");
+                    write_fd_u32(vfd, msg[0x1c]);
+                    write_fd_str(vfd, " M20=");
+                    write_fd_u32(vfd, msg[0x20]);
+                    write_fd_str(vfd, " SRC=(");
+                    write_fd_u32(vfd, *(uint16_t *)(msg + 0x0c));
+                    write_fd_str(vfd, ",");
+                    write_fd_u32(vfd, *(uint16_t *)(msg + 0x0e));
+                    write_fd_str(vfd, ",");
+                    write_fd_u32(vfd, *(uint16_t *)(msg + 0x10));
+                    write_fd_str(vfd, ",");
+                    write_fd_u32(vfd, *(uint16_t *)(msg + 0x12));
+                    write_fd_str(vfd, ") DST=(");
                     write_fd_u32(vfd, *(uint16_t *)(msg + 0x14));
                     write_fd_str(vfd, ",");
                     write_fd_u32(vfd, *(uint16_t *)(msg + 0x16));
@@ -765,6 +812,21 @@ static void patch_viewport_table(int mode) {
     row2[0x1d] = vp_slot;
     row2[0x1e] = (mode == 1) ? 0x19 : 0x36;
     row2[0x21] = (mode == 1) ? 0x1b : 0x16; // HDMI OUT=4 aspect=1: 0x1b=(50,0,540,480 3:2) vs 0x16=(0,0,640,480 16:9)
+
+    // Patch Row 7 (Focus Magnifier 1.0x box & 4.0x zoom) so OSD/minimap/YUV rects match 3:2 (0x19 LCD/EVF, 0x1b HDMI).
+    volatile uint8_t *row7 = reinterpret_cast<volatile uint8_t *>(tbl_va + 7 * 44);
+    row7[0x05] = vp_slot;
+    row7[0x09] = (mode == 1) ? 0x19 : 0x22;
+    row7[0x0c] = (mode == 1) ? 0x19 : 0x2d;
+    row7[0x0d] = (mode == 1) ? 0x19 : 0x2d;
+    row7[0x13] = vp_slot;
+    row7[0x17] = vp_slot;
+    row7[0x1a] = (mode == 1) ? 0x19 : 0x2d;
+    row7[0x1b] = (mode == 1) ? 0x19 : 0x2d;
+    row7[0x21] = (mode == 1) ? 0x1b : 0x16;
+    row7[0x25] = (mode == 1) ? 0x1b : 0x16;
+    row7[0x28] = (mode == 1) ? 0x1b : 0x2f;
+    row7[0x29] = (mode == 1) ? 0x1b : 0x16;
 }
 
 static void refresh_yuv_viewport(void) {
@@ -1047,6 +1109,85 @@ static void apply_all_og_patches(int mode, const char *reason, int do_refresh) {
                         else ++vef_oth;
                     }
 
+                    // Patch CP ZIT/DDX defect pixel correction dictionaries (0x01260fc8 static factory + 0x012630b8 dynamic Pixel Mapping):
+                    // At cold boot CP cropped mode 0x0820 keys (side=1/2) to stock 16:9 (y_min=220, h=2408, shifted by -220).
+                    // Redirecting mode 0x0820 keys to B[0] (f0=0x02, rect=(0,0,0,0), full-sensor uncropped 4264x2848 DDX map)
+                    // makes program_ddx_hw (0x007ab542) program exact HW offset (live_y=0, live_x>>2) and filter all 2848 rows cleanly.
+                    static const uint32_t kDdxTblBases[2] = { 0x01260fc8U, 0x012630b8U };
+                    uint32_t ddx_og = 0, ddx_st = 0, ddx_oth = 0;
+                    for (int t = 0; t < 2; ++t) {
+                        uint32_t tbl_base = kDdxTblBases[t];
+                        uint32_t attr_addr = tbl_base + 0x12d8U;
+                        uint32_t attr_al = attr_addr & ~0x3fU;
+                        uint32_t attr_off = attr_addr - attr_al;
+                        for (uint32_t i = 0; i < 0x80U; ++i) buf[i] = 0;
+                        if (my_sen_dma_transfer(0, attr_al, dmm_phys, 0x80U) != 0) {
+                            ddx_oth += 2U;
+                            continue;
+                        }
+                        uint8_t b0_f0 = buf[attr_off + 0];
+                        uint16_t b0_x = *(uint16_t *)(buf + attr_off + 2);
+                        uint16_t b0_y = *(uint16_t *)(buf + attr_off + 4);
+                        uint16_t b0_w = *(uint16_t *)(buf + attr_off + 6);
+                        uint16_t b0_h = *(uint16_t *)(buf + attr_off + 8);
+                        if (b0_f0 != 0x02U || b0_x != 0U || b0_y != 0U || b0_w != 0U || b0_h != 0U) {
+                            ddx_oth += 2U;
+                            continue;
+                        }
+                        uint32_t key_al = tbl_base & ~0x3fU;
+                        uint32_t key_off = tbl_base - key_al;
+                        const uint32_t key_sz = 0x0a00U;
+                        for (uint32_t i = 0; i < key_sz; ++i) buf[i] = 0;
+                        if (my_sen_dma_transfer(0, key_al, dmm_phys, key_sz) != 0) {
+                            ddx_oth += 2U;
+                            continue;
+                        }
+                        uint32_t num_buckets = *(uint32_t *)(buf + key_off + 0x10U);
+                        uint32_t num_keys = *(uint32_t *)(buf + key_off + 0x14U);
+                        if (num_buckets < 11U || num_buckets > 300U || num_keys < 15U || num_keys > 300U) {
+                            ddx_oth += 2U;
+                            continue;
+                        }
+                        int dirty = 0;
+                        for (uint32_t k = 0; k < num_keys; ++k) {
+                            uint8_t *kp = buf + key_off + 0x18U + k * 8U;
+                            uint32_t dm = *(uint32_t *)(kp + 0);
+                            uint8_t flg = kp[4];
+                            if (dm == 0x00000820U && (flg == 1U || flg == 2U)) {
+                                int slot = (flg == 1U) ? 0 : 1;
+                                uint16_t *bp = (uint16_t *)(kp + 6);
+                                if (!g_saved_ddx_valid[t][slot]) {
+                                    g_saved_ddx_bidx[t][slot] = (*bp != 0U) ? *bp : (uint16_t)((flg == 1U) ? 9U : 10U);
+                                    g_saved_ddx_valid[t][slot] = 1;
+                                }
+                                uint16_t want = en ? 0U : g_saved_ddx_bidx[t][slot];
+                                if (*bp != want) {
+                                    *bp = want;
+                                    dirty = 1;
+                                }
+                            }
+                        }
+                        if (dirty) {
+                            __asm__ volatile("dsb sy" ::: "memory");
+                            my_sen_dma_transfer(1, dmm_phys, key_al, key_sz);
+                            for (uint32_t i = 0; i < key_sz; ++i) buf[i] = 0;
+                            __asm__ volatile("dsb sy" ::: "memory");
+                            my_sen_dma_transfer(0, key_al, dmm_phys, key_sz);
+                        }
+                        for (uint32_t k = 0; k < num_keys; ++k) {
+                            uint8_t *kp = buf + key_off + 0x18U + k * 8U;
+                            uint32_t dm = *(uint32_t *)(kp + 0);
+                            uint8_t flg = kp[4];
+                            if (dm == 0x00000820U && (flg == 1U || flg == 2U)) {
+                                int slot = (flg == 1U) ? 0 : 1;
+                                uint16_t cur_b = *(uint16_t *)(kp + 6);
+                                if (cur_b == 0U) ++ddx_og;
+                                else if (cur_b == g_saved_ddx_bidx[t][slot]) ++ddx_st;
+                                else ++ddx_oth;
+                            }
+                        }
+                    }
+
                     write_str("CP_RAM: OG=");
                     write_u32(cp_og);
                     write_str(" STOCK=");
@@ -1059,6 +1200,12 @@ static void apply_all_og_patches(int mode, const char *reason, int do_refresh) {
                     write_u32(vef_st);
                     write_str(" OTH=");
                     write_u32(vef_oth);
+                    write_str(" | CP_DDX: OG=");
+                    write_u32(ddx_og);
+                    write_str(" STOCK=");
+                    write_u32(ddx_st);
+                    write_str(" OTH=");
+                    write_u32(ddx_oth);
                     write_str("\n");
                     sc4(215, map_res, 4096 + page_off, 0, 0);
                 }
@@ -1069,13 +1216,17 @@ static void apply_all_og_patches(int mode, const char *reason, int do_refresh) {
     }
 
     if (do_refresh) {
-        refresh_yuv_viewport();
         uint32_t cur_sys = g_appfw_base ? *(volatile uint32_t *)(g_appfw_base + 0x7f721f8) : 999U;
         uint32_t cur_opt = g_appfw_base ? *(volatile uint32_t *)(g_appfw_base + 0x7f72268) : 999U;
         uint32_t cur_exp = g_appfw_base ? *(volatile uint32_t *)(g_appfw_base + 0x7f99b78) : 999U;
         uint32_t busy340 = g_appfw_base ? *(volatile uint32_t *)(g_appfw_base + 0x7f72340) : 999U;
         uint32_t ee_b10  = g_appfw_base ? *(volatile uint32_t *)(g_appfw_base + 0x7f72b10) : 999U;
         uint32_t rec360  = g_appfw_base ? *(volatile uint32_t *)(g_appfw_base + 0x7f72360) : 999U;
+        // Avoid premature 3:2 stretch over live 16:9 CP frames: let execute_sensor_mode_bounce()
+        // apply CMD=0x0147 atomically inside sequence_set_movie_format when in Movie Live View.
+        if (!(cur_sys == 3U && cur_opt == 0U && is_movie_or_sq_exp(cur_exp))) {
+            refresh_yuv_viewport();
+        }
         g_pending_sensor_restart = 1;
         write_str("RESTART=QUEUED SYS=");
         write_u32(cur_sys);
@@ -1133,51 +1284,33 @@ static void execute_sensor_mode_bounce(void) {
         g_log_fd = -1;
     }
 
-    // Official Sony non-recording Movie Format + EE Reconfigure sequences:
-    //   1) cmd 0x0f3 (model::sequence_set_movie_format via 0x24fabfc + 0x24ef294):
-    //      runs mpr_SetMovieRecParam + set_movie_format + CP VDF layout (0x0111/0x0147)
-    //   2) cmd 0x4a1d (0x256ccec(&ctx, 1) -> model::sequence_restart_ee 0x2bf + HDMI 0xee):
-    //      runs set_movie_ee + vdf_get_yuv_read_start + adf_proc_set_path + adf_set_input
-    // Never touches recording or media.
+    // Enqueue Sony's non-recording Movie Format + EE Restart + HDMI Update atomically in one FIFO flush
+    // under model recursive lock (0x2e7849c/0x2e78178), avoiding a double blackout/glitch:
+    //   1) cmd 0x0f3 (0x24fabfc): model::sequence_set_movie_format (mpr_SetMovieRecParam + VDF 0x0111/0x0147)
+    //   2) cmd 0x2bf (0x250e83c): model::sequence_restart_ee (reloads IMX510 SPI, 0820_CLV, CP_VEF, DDX SRAM)
+    //   3) cmd 0x0ee (0x24fa88c): model::sequence_change_hdmi_resolution
     typedef void (*LockFn)(uint64_t *);
     typedef void (*EnqueueSeqFn)(const void *, uint8_t, uint64_t);
     typedef void (*FlushSeqFn)(void);
-    typedef void (*CtxFn)(uint64_t *);
-    typedef void (*RestartEeCmdFn)(uint64_t *, uint8_t);
 
     LockFn model_lock_enter = reinterpret_cast<LockFn>(g_appfw_base + 0x2e7849c);
     LockFn model_lock_leave = reinterpret_cast<LockFn>(g_appfw_base + 0x2e78178);
     EnqueueSeqFn enqueue_set_movie_format = reinterpret_cast<EnqueueSeqFn>(g_appfw_base + 0x24fabfc);
+    EnqueueSeqFn enqueue_restart_ee = reinterpret_cast<EnqueueSeqFn>(g_appfw_base + 0x250e83c);
+    EnqueueSeqFn enqueue_hdmi_res = reinterpret_cast<EnqueueSeqFn>(g_appfw_base + 0x24fa88c);
     FlushSeqFn flush_seq_queue = reinterpret_cast<FlushSeqFn>(g_appfw_base + 0x24ef294);
-    CtxFn ctx_enter = reinterpret_cast<CtxFn>(g_appfw_base + 0x2540a08);
-    CtxFn ctx_leave = reinterpret_cast<CtxFn>(g_appfw_base + 0x2540a18);
-    RestartEeCmdFn restart_ee_cmd = reinterpret_cast<RestartEeCmdFn>(g_appfw_base + 0x256ccec);
 
     uint64_t lock = 0;
     uint8_t dummy = 0;
     model_lock_enter(&lock);
     enqueue_set_movie_format(&dummy, 1, 0);
+    enqueue_restart_ee(&dummy, 1, 0);
+    enqueue_hdmi_res(&dummy, 1, 0);
     flush_seq_queue();
     model_lock_leave(&lock);
 
-    usleep(350000);
-    for (int i = 0; i < 20; ++i) {
-        uint32_t s = *(volatile uint32_t *)(g_appfw_base + 0x7f721f8);
-        uint32_t b = *(volatile uint32_t *)(g_appfw_base + 0x7f72340);
-        uint32_t e = *(volatile uint32_t *)(g_appfw_base + 0x7f72b10);
-        if (s == 3U && b == 0U && e != 0U) {
-            break;
-        }
-        usleep(50000);
-    }
-
-    uint64_t ctx = 0;
-    ctx_enter(&ctx);
-    restart_ee_cmd(&ctx, 1);
-    ctx_leave(&ctx);
-
-    usleep(350000);
-    for (int i = 0; i < 20; ++i) {
+    usleep(250000);
+    for (int i = 0; i < 30; ++i) {
         uint32_t s = *(volatile uint32_t *)(g_appfw_base + 0x7f721f8);
         uint32_t b = *(volatile uint32_t *)(g_appfw_base + 0x7f72340);
         uint32_t e = *(volatile uint32_t *)(g_appfw_base + 0x7f72b10);
@@ -1353,6 +1486,7 @@ static void patch_uxc_doom_strings(void) {
 
 static void *og_worker(void *) {
     usleep(120000);
+    uint32_t prev_sys = 0xffffffffU;
     if (g_appfw_base) {
         uint32_t prio = *(volatile uint32_t *)(g_appfw_base + 0x7f83490);
         if (prio > 1) {
@@ -1363,15 +1497,23 @@ static void *og_worker(void *) {
         g_last_prio = prio;
         g_last_mode = (prio == 0) ? 1 : 2;
         g_applied_hw_mode = g_last_mode;
-        apply_all_og_patches(g_last_mode, "INIT_V19_2560_PB_VP", 1);
+        apply_all_og_patches(g_last_mode, "INIT_V23_FMAG_PIN_ASPECT", 1);
         uint32_t cur_sys = *(volatile uint32_t *)(g_appfw_base + 0x7f721f8);
         uint32_t cur_opt = *(volatile uint32_t *)(g_appfw_base + 0x7f72268);
+        uint32_t cur_exp = *(volatile uint32_t *)(g_appfw_base + 0x7f99b78);
+        uint32_t busy340 = *(volatile uint32_t *)(g_appfw_base + 0x7f72340);
+        uint32_t ee_b10  = *(volatile uint32_t *)(g_appfw_base + 0x7f72b10);
+        uint32_t rec360  = *(volatile uint32_t *)(g_appfw_base + 0x7f72360);
+        prev_sys = cur_sys;
         if (cur_sys == 4U && cur_opt == 2U) {
             g_was_usb = 1;
+        } else if (cur_sys == 3U && cur_opt == 0U && busy340 == 0U && ee_b10 != 0U && rec360 == 0U && is_movie_or_sq_exp(cur_exp)) {
+            // Immediately reconfigure Movie Format + EE right after patching CP RAM so CP does not stream stale 16:9 frames
+            g_pending_sensor_restart = 0;
+            execute_sensor_mode_bounce();
         }
     }
     uint32_t uxc_tick = 0;
-    uint32_t prev_sys = 0xffffffffU;
     for (;;) {
         usleep(60000);
         if (!g_appfw_base) continue;
@@ -1416,12 +1558,12 @@ static void *og_worker(void *) {
                 1);
         }
 
-        // Refresh viewport table whenever switching between Movie/Playback modes
+        // Keep RAM viewport table synced on mode change without firing an async CMD=0x0147 IPC
+        // mid-transition (hook_3519d94 already rewrites appFw's synchronized CMD=0x0147 cleanly).
         if (cur_sys != prev_sys) {
             prev_sys = cur_sys;
             if (cur_sys == 3U || cur_sys == 4U || cur_sys == 5U) {
                 patch_viewport_table(g_last_mode);
-                refresh_yuv_viewport();
             }
         }
 
@@ -1430,10 +1572,10 @@ static void *og_worker(void *) {
             patch_uxc_ram_only();
         }
 
-        // SYSTEM_MODE_REC_MOVIE == 3U: reconfigure CP sensor+VEF once Movie Live View is idle (B340=0, EEB10!=0, REC360=0)
+        // SYSTEM_MODE_REC_MOVIE == 3U: reconfigure CP sensor+VEF+DDX once Movie Live View is idle (B340=0, EEB10!=0, REC360=0)
         if (g_pending_sensor_restart || (g_was_usb && cur_sys == 3U && cur_opt == 0U && busy340 == 0U && ee_b10 != 0U && rec360 == 0U)) {
             if (cur_sys == 3U && cur_opt == 0U && busy340 == 0U && ee_b10 != 0U && rec360 == 0U && is_movie_or_sq_exp(cur_exp)) {
-                usleep(300000);
+                usleep(80000);
                 uint32_t s2 = *(volatile uint32_t *)(g_appfw_base + 0x7f721f8);
                 uint32_t o2 = *(volatile uint32_t *)(g_appfw_base + 0x7f72268);
                 uint32_t x2 = *(volatile uint32_t *)(g_appfw_base + 0x7f99b78);
