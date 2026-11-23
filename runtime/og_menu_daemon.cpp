@@ -160,10 +160,12 @@ static volatile int g_last_mode = 1;
 static volatile int g_applied_hw_mode = 0;
 static volatile uint32_t g_was_usb = 0;
 static int g_worker_started = 0;
-static const uint32_t kDaemonTokenV5 = 0x4f474d17U;
+static const uint32_t kDaemonTokenV5 = 0x4f474d1aU;
 extern "C" {
 __attribute__((visibility("hidden"))) uint64_t g_orig_3519da4 = 0;
 __attribute__((visibility("hidden"))) int call_orig_3519d94(uint32_t dst_id, void *msg, uint32_t size, void *reply, uint32_t reply_size);
+__attribute__((visibility("hidden"))) uint64_t g_orig_26a6f5c = 0;
+__attribute__((visibility("hidden"))) void call_orig_26a6f4c(void *ctx, int delta);
 }
 
 __asm__(
@@ -179,6 +181,18 @@ __asm__(
     "add x22, x29, #0x50\n"
     "adrp x16, g_orig_3519da4\n"
     "ldr x16, [x16, :lo12:g_orig_3519da4]\n"
+    "br x16\n"
+    ".align 4\n"
+    ".global call_orig_26a6f4c\n"
+    ".hidden call_orig_26a6f4c\n"
+    ".hidden g_orig_26a6f5c\n"
+    "call_orig_26a6f4c:\n"
+    "stp x29, x30, [sp, #-0x60]!\n"
+    "mov x2, #1\n"
+    "mov x29, sp\n"
+    "str x21, [sp, #0x20]\n"
+    "adrp x16, g_orig_26a6f5c\n"
+    "ldr x16, [x16, :lo12:g_orig_26a6f5c]\n"
     "br x16\n"
 );
 
@@ -650,7 +664,7 @@ extern "C" int hook_3519d94(uint32_t dst_id, uint8_t *msg, uint32_t size, void *
             }
         }
         int call_rc = call_orig_3519d94(dst_id, msg, size, reply, reply_size);
-        if (cmd == 0x147 || cmd == 0x152 || (cmd == 0x16e && fixed) || (cmd == 0x14c && (msg[8] != 7 || fixed))) {
+        if (cmd == 0x134 || cmd == 0x15f || cmd == 0x147 || cmd == 0x152 || (cmd == 0x16e && fixed) || (cmd == 0x14c && (msg[8] != 7 || fixed))) {
             long vfd = sc4(56, -100, (long)"/tmp/jiritsu/vdf-log.txt", 1 | 64 | 1024, 0644);
             if (vfd >= 0) {
                 write_fd_str(vfd, "SYS=");
@@ -661,7 +675,15 @@ extern "C" int hook_3519d94(uint32_t dst_id, uint8_t *msg, uint32_t size, void *
                 write_fd_hex(vfd, cmd, 4);
                 write_fd_str(vfd, " LR=0x");
                 write_fd_hex(vfd, lr - g_appfw_base, 7);
-                if (cmd == 0x16e && size == 0x0c) {
+                if (cmd == 0x134 && size >= 13) {
+                    write_fd_str(vfd, " EI_GAIN=");
+                    write_fd_u32(vfd, *(uint32_t *)(msg + 8));
+                    write_fd_str(vfd, " ON=");
+                    write_fd_u32(vfd, (uint32_t)msg[12]);
+                } else if (cmd == 0x15f && size >= 12) {
+                    write_fd_str(vfd, " ISO_15F=");
+                    write_fd_u32(vfd, *(uint32_t *)(msg + 8));
+                } else if (cmd == 0x16e && size == 0x0c) {
                     write_fd_str(vfd, " DESQ=(");
                     write_fd_u32(vfd, orig_b8);
                     write_fd_str(vfd, ",");
@@ -742,6 +764,175 @@ extern "C" int hook_3519d94(uint32_t dst_id, uint8_t *msg, uint32_t size, void *
     return call_orig_3519d94(dst_id, msg, size, reply, reply_size);
 }
 
+// Hardware Shutter Angle CP IPC encoder (PID 0x401c, exact port of FX3 7.02 @ 0x2e1cad8).
+// A7S III cpapp-b.bin @ 0x007a6c3e already implements the full mode/cmd/numer/denom/frame
+// handler, while appFw.so @ 0x355bda0 stripped the ShutterMode==1 (Angle) branch.
+// Note: A7S III sequence_set_shut_drive_for_shutter_angle::run (0x34a46fc) packs
+// ShutterMode (u16) at in+0x0c and Angle (u16) at in+0x0e.
+extern "C" void hook_355bda0(const uint8_t *in_b, uint32_t *out) {
+    if (!g_appfw_base || !in_b) {
+        if (out) *out = 0U;
+        return;
+    }
+    uint8_t msg[0x18];
+    for (int i = 0; i < 0x18; ++i) msg[i] = 0;
+    msg[0] = 5;
+    *(uint16_t *)(msg + 2) = 0x401cU;
+    *(uint32_t *)(msg + 4) = *(const uint32_t *)(in_b + 0x00);
+
+    uint16_t shut_mode = *(const uint16_t *)(in_b + 0x0c); // 0 = Speed, 1 = Angle
+    uint16_t angle     = *(const uint16_t *)(in_b + 0x0e); // 0..9 = 64F..2F, 10..28 = 360.0..5.6
+    uint32_t cur_exp   = *(const uint32_t *)(in_b + 0x10);
+    uint32_t file_fmt  = *(const uint32_t *)(in_b + 0x14);
+    uint32_t fps_idx   = *(const uint32_t *)(in_b + 0x18);
+    uint32_t sq_rec    = *(const uint32_t *)(in_b + 0x1c);
+    uint32_t sq_nrm    = *(const uint32_t *)(in_b + 0x20);
+    uint32_t sq_dci    = *(const uint32_t *)(in_b + 0x24);
+
+    if (shut_mode == 0U) {
+        uint32_t drv = *(const uint32_t *)(in_b + 0x04);
+        uint32_t typ = *(const uint32_t *)(in_b + 0x08);
+        msg[8] = (uint8_t)(drv & 0xffU);
+        msg[9] = (typ == 1U) ? 1U : 0U;
+    } else if (shut_mode == 1U) {
+        if (angle <= 9U) {
+            static const uint8_t kFrames[10] = {64, 32, 16, 8, 7, 6, 5, 4, 3, 2};
+            msg[10] = 1; // mode = Angle
+            msg[11] = 2; // cmd = frame-accumulation (64F..2F)
+            *(uint32_t *)(msg + 20) = (uint32_t)kFrames[angle];
+        } else if (angle <= 28U) {
+            static const uint32_t kAngleX1000[19] = {
+                360000, 300000, 270000, 240000, 216000, 210000, 180000, 172800,
+                150000, 144000, 120000,  90000,  86400,  72000,  45000,  30000,
+                 22500,  11250,   5600
+            };
+            static const uint16_t kFpsX100[8] = {
+                5994, 5000, 2997, 2500, 2398, 11988, 10000, 2400
+            };
+            static const uint8_t kSqDci[7]  = {48, 24, 12, 6, 3, 2, 1};
+            static const uint8_t kSqNrm[16] = {240, 200, 120, 100, 60, 50, 30, 25, 15, 12, 8, 6, 4, 3, 2, 1};
+
+            uint32_t ang_x1000 = kAngleX1000[angle - 10U];
+            int is_sq = (cur_exp <= 28U) && (((0x103e0000U >> cur_exp) & 1U) != 0U);
+            msg[10] = 1; // mode = Angle
+            msg[11] = 1; // cmd = absolute numer/denom
+            if (!is_sq) {
+                uint64_t fps_x100 = (fps_idx <= 7U) ? (uint64_t)kFpsX100[fps_idx] : 2500ULL;
+                uint64_t denom = (fps_x100 * 360000ULL) / (uint64_t)ang_x1000;
+                if (denom > 0xffffffffULL) denom = 0xffffffffULL;
+                *(uint32_t *)(msg + 12) = 100U;
+                *(uint32_t *)(msg + 16) = (uint32_t)denom;
+            } else {
+                uint32_t sq_fps = 1U;
+                if (file_fmt == 0x0bU && sq_rec == 7U) {
+                    sq_fps = (sq_dci <= 6U) ? (uint32_t)kSqDci[sq_dci] : 1U;
+                } else {
+                    sq_fps = (sq_nrm <= 15U) ? (uint32_t)kSqNrm[sq_nrm] : 1U;
+                }
+                if (sq_fps == 0U) sq_fps = 1U;
+                *(uint32_t *)(msg + 12) = ang_x1000;
+                *(uint32_t *)(msg + 16) = sq_fps * 360000U;
+            }
+        }
+    }
+
+    reinterpret_cast<void (*)(uint16_t, const void *, uint64_t)>(g_appfw_base + 0x3691938)(
+        0x401cU, msg + 8, 0x10ULL);
+    reinterpret_cast<void (*)(uint32_t, const void *, uint64_t, uint32_t, uint64_t, uint64_t)>(g_appfw_base + 0x355277c)(
+        0x90030001U, msg, 0x18ULL, 0U, 0ULL, 0ULL);
+    if (out) *out = 0U;
+
+    long vfd = sc4(56, -100, (long)"/tmp/jiritsu/vdf-log.txt", 1 | 64 | 1024, 0644);
+    if (vfd >= 0) {
+        write_fd_str(vfd, "SHUT_401C MODE=");
+        write_fd_u32(vfd, (uint32_t)shut_mode);
+        write_fd_str(vfd, " ANG=");
+        write_fd_u32(vfd, (uint32_t)angle);
+        write_fd_str(vfd, " FPS=");
+        write_fd_u32(vfd, fps_idx);
+        write_fd_str(vfd, " CMD=");
+        write_fd_u32(vfd, (uint32_t)msg[11]);
+        write_fd_str(vfd, " ABS=");
+        write_fd_u32(vfd, *(uint32_t *)(msg + 12));
+        write_fd_str(vfd, "/");
+        write_fd_u32(vfd, *(uint32_t *)(msg + 16));
+        write_fd_str(vfd, " F=");
+        write_fd_u32(vfd, *(uint32_t *)(msg + 20));
+        write_fd_str(vfd, "\n");
+        sc4(57, vfd, 0, 0, 0);
+    }
+}
+
+// Shutter Angle dial stepper hook (appFw + 0x26a6f4c):
+// When delta == 0 (apply from menu or FPS sync), runs original 0x26a6f4c -> sequence 0x63 -> hook_355bda0.
+// When delta != 0 (physical shutter wheel), steps Angle cleanly via native Angle setter 0x26a70ac.
+extern "C" void hook_26a6f4c(void *ctx, int delta) {
+    if (!g_appfw_base || delta == 0) {
+        call_orig_26a6f4c(ctx, delta);
+        if (g_appfw_base) {
+            reinterpret_cast<void (*)(void)>(g_appfw_base + 0x24ef294)();
+        }
+        return;
+    }
+    uint32_t cur = *(volatile uint32_t *)(g_appfw_base + 0x7f84f98);
+    if (cur > 28U) cur = 16U;
+    int lo = (cur >= 10U) ? 10 : 0;
+    int next = (int)cur + delta;
+    if (next < lo) next = lo;
+    if (next > 28) next = 28;
+    if ((uint32_t)next != cur) {
+        reinterpret_cast<void (*)(void *, uint32_t)>(g_appfw_base + 0x26a70ac)(ctx, (uint32_t)next);
+    }
+}
+
+static void trigger_shutter_angle_apply(void) {
+    if (!g_appfw_base) return;
+    uint64_t ctx = 0;
+    reinterpret_cast<void (*)(uint64_t *)>(g_appfw_base + 0x2540a08)(&ctx);
+    call_orig_26a6f4c(&ctx, 0);
+    reinterpret_cast<void (*)(void)>(g_appfw_base + 0x24ef294)();
+    reinterpret_cast<void (*)(uint64_t *)>(g_appfw_base + 0x2540a18)(&ctx);
+}
+
+// Exposure Index (Cine EI / Cine EI Quick) physical ISO wheel steppers.
+// Stock A7S III strips dataflow step nodes 0x4046..0x404b, while the native EI setters
+// (0x26cb460, 0x26c972c, 0x26c9aa0) and VDF EI gain pipeline (CMD 0x0134/0x015f) are intact.
+static void step_ei_value(void *ctx, int delta, uint32_t val_off, uint32_t setter_off, int lo, int hi) {
+    if (!g_appfw_base || delta == 0) return;
+    int cur = (int)*(volatile uint32_t *)(g_appfw_base + val_off);
+    if (cur < lo) cur = lo;
+    if (cur > hi) cur = hi;
+    int next = cur + delta;
+    if (next < lo) next = lo;
+    if (next > hi) next = hi;
+    if (next != cur) {
+        reinterpret_cast<void (*)(void *, uint32_t)>(g_appfw_base + setter_off)(ctx, (uint32_t)next);
+        reinterpret_cast<void (*)(void)>(g_appfw_base + 0x24ef294)();
+    }
+}
+
+extern "C" void hook_ei_auto_step(void *ctx, int delta) {
+    step_ei_value(ctx, delta, 0x7f85160U, 0x26cb460U, 1, 25); // Cine EI Quick: 200..51200 EI
+}
+
+extern "C" void hook_ei_low_step(void *ctx, int delta) {
+    step_ei_value(ctx, delta, 0x7f85198U, 0x26c972cU, 1, 13); // Base ISO 800: 200..3200 EI
+}
+
+extern "C" void hook_ei_high_step(void *ctx, int delta) {
+    step_ei_value(ctx, delta, 0x7f851d0U, 0x26c9aa0U, 13, 25); // Base ISO 12800: 3200..51200 EI
+}
+
+static void install_hook16(uint64_t target_va, void *hook_fn) {
+    sc4(226, (long)(target_va & ~0xfffULL), 4096, 7, 0);
+    *(volatile uint32_t *)(target_va + 0) = 0x58000050U; // ldr x16, #8
+    *(volatile uint32_t *)(target_va + 4) = 0xd61f0200U; // br x16
+    *(volatile uint64_t *)(target_va + 8) = (uint64_t)hook_fn;
+    for (int i = 0; i < 16; i += 4) {
+        flush_icache_addr(target_va + i);
+    }
+}
+
 static void restore_stock_4b72818(void) {
     if (!g_appfw_base) return;
     uint8_t stock[0x4e8];
@@ -777,15 +968,22 @@ static void restore_stock_4b72818(void) {
 
     // Install 16-byte hook on 0x3519d94 (VDF IPC sender)
     g_orig_3519da4 = g_appfw_base + 0x3519da4;
-    uint64_t vdf_fn_va = g_appfw_base + 0x3519d94;
-    sc4(226, (long)(vdf_fn_va & ~0xfffULL), 4096, 7, 0);
-    uint64_t hook_addr = (uint64_t)&hook_3519d94;
-    *(volatile uint32_t *)(vdf_fn_va + 0) = 0x58000050U; // ldr x16, #8
-    *(volatile uint32_t *)(vdf_fn_va + 4) = 0xd61f0200U; // br x16
-    *(volatile uint64_t *)(vdf_fn_va + 8) = hook_addr;
-    for (int i = 0; i < 16; i += 4) {
-        flush_icache_addr(vdf_fn_va + i);
-    }
+    install_hook16(g_appfw_base + 0x3519d94, (void *)&hook_3519d94);
+
+    // Install 16-byte hook on 0x355bda0 (PID 0x401c PID_SET_SHUT_DRIVE for hardware Shutter Angle)
+    install_hook16(g_appfw_base + 0x355bda0, (void *)&hook_355bda0);
+
+    // Install 16-byte hook on 0x26a6f4c (Shutter Angle wheel stepper -> native 0x26a70ac)
+    g_orig_26a6f5c = g_appfw_base + 0x26a6f5c;
+    install_hook16(g_appfw_base + 0x26a6f4c, (void *)&hook_26a6f4c);
+
+    // Install 16-byte hooks on the 6 Cine EI / Cine EI Quick ISO-wheel steppers (replacing stripped 0x4046..0x404b)
+    install_hook16(g_appfw_base + 0x26cb554, (void *)&hook_ei_auto_step);
+    install_hook16(g_appfw_base + 0x26cb644, (void *)&hook_ei_auto_step);
+    install_hook16(g_appfw_base + 0x26c9820, (void *)&hook_ei_low_step);
+    install_hook16(g_appfw_base + 0x26c9910, (void *)&hook_ei_low_step);
+    install_hook16(g_appfw_base + 0x26c9b94, (void *)&hook_ei_high_step);
+    install_hook16(g_appfw_base + 0x26c9c84, (void *)&hook_ei_high_step);
 }
 
 static void patch_viewport_table(int mode) {
@@ -1497,7 +1695,7 @@ static void *og_worker(void *) {
         g_last_prio = prio;
         g_last_mode = (prio == 0) ? 1 : 2;
         g_applied_hw_mode = g_last_mode;
-        apply_all_og_patches(g_last_mode, "INIT_V23_FMAG_PIN_ASPECT", 1);
+        apply_all_og_patches(g_last_mode, "INIT_V26_CINEMA_LINE", 1);
         uint32_t cur_sys = *(volatile uint32_t *)(g_appfw_base + 0x7f721f8);
         uint32_t cur_opt = *(volatile uint32_t *)(g_appfw_base + 0x7f72268);
         uint32_t cur_exp = *(volatile uint32_t *)(g_appfw_base + 0x7f99b78);
@@ -1514,6 +1712,11 @@ static void *og_worker(void *) {
         }
     }
     uint32_t uxc_tick = 0;
+    uint32_t last_shut_mode = 0xffffffffU;
+    uint32_t last_angle_val = 0xffffffffU;
+    uint32_t last_fps_hash  = 0xffffffffU;
+    uint32_t last_angle_sys = 0xffffffffU;
+    uint32_t angle_sync_delay = 0;
     for (;;) {
         usleep(60000);
         if (!g_appfw_base) continue;
@@ -1524,6 +1727,13 @@ static void *og_worker(void *) {
         *(void **)(g_appfw_base + 0x5875d40) = (void *)hooked_opengate_menu_cb;
         *(void **)(g_appfw_base + 0x5860040) = (void *)(g_appfw_base + 0x1c94cf4);
         *(void **)(g_appfw_base + 0x587e798) = (void *)hooked_doom_menu_cb;
+        // Keep Shutter Angle dial, +/- step locks, and Shutter Mode caps open
+        *(volatile uint8_t *)(g_appfw_base + 0x8455f39) = 0;
+        *(volatile uint8_t *)(g_appfw_base + 0x8455f3c) = 0;
+        *(volatile uint8_t *)(g_appfw_base + 0x8455f3d) = 0;
+        *(volatile uint8_t *)(g_appfw_base + 0x7f84f2c) = 0;
+        *(volatile uint8_t *)(g_appfw_base + 0x7f84f2d) = 0;
+        *(volatile uint8_t *)(g_appfw_base + 0x7f84f2e) = 0;
 
         uint32_t cur_sys = *(volatile uint32_t *)(g_appfw_base + 0x7f721f8);
         uint32_t cur_opt = *(volatile uint32_t *)(g_appfw_base + 0x7f72268);
@@ -1539,6 +1749,46 @@ static void *og_worker(void *) {
         }
         uint32_t forced = g_force_refresh;
         int want_mode = (prio == 0U) ? 1 : 2;
+
+        // Hardware Shutter Angle auto-sync across Shutter Mode switches, Rec FPS changes, S&Q FPS changes,
+        // and Playback/USB returns in Movie/S&Q Live View.
+        {
+            uint32_t sm  = *(volatile uint32_t *)(g_appfw_base + 0x7f84f10);
+            uint32_t ang = *(volatile uint32_t *)(g_appfw_base + 0x7f84f98);
+            uint32_t fh = *(volatile uint32_t *)(g_appfw_base + 0x7f81c10) * 31U;
+            fh ^= *(volatile uint32_t *)(g_appfw_base + 0x7f81c18) * 17U;
+            fh ^= *(volatile uint32_t *)(g_appfw_base + 0x7f81c60) * 19U;
+            fh ^= *(volatile uint32_t *)(g_appfw_base + 0x7f81c88) * 23U;
+            fh ^= *(volatile uint32_t *)(g_appfw_base + 0x7f81cb0) * 29U;
+            fh ^= *(volatile uint32_t *)(g_appfw_base + 0x7f81cd8) * 37U;
+            fh ^= *(volatile uint32_t *)(g_appfw_base + 0x7f81d00) * 41U;
+            fh ^= *(volatile uint32_t *)(g_appfw_base + 0x7f81d28) * 43U;
+            fh ^= *(volatile uint32_t *)(g_appfw_base + 0x7f81d50) * 47U;
+            fh ^= *(volatile uint32_t *)(g_appfw_base + 0x7f82608) * 53U; // S&Q Rec FPS
+            fh ^= *(volatile uint32_t *)(g_appfw_base + 0x7f82630) * 59U; // S&Q Frame Rate (Normal)
+            fh ^= *(volatile uint32_t *)(g_appfw_base + 0x7f82660) * 61U; // S&Q Frame Rate (DCI)
+            fh ^= (cur_exp << 16);
+            int in_movie_lv = (cur_sys == 3U && cur_opt == 0U && busy340 == 0U && ee_b10 != 0U && rec360 == 0U && is_movie_or_sq_exp(cur_exp));
+            if (in_movie_lv) {
+                if (sm != last_shut_mode || (sm == 1U && (ang != last_angle_val || fh != last_fps_hash || cur_sys != last_angle_sys))) {
+                    int mode_off_transition = (last_shut_mode == 1U && sm == 0U);
+                    last_shut_mode = sm;
+                    last_angle_val = ang;
+                    last_fps_hash  = fh;
+                    last_angle_sys = cur_sys;
+                    if (sm == 1U || mode_off_transition) {
+                        angle_sync_delay = 3U; // ~180ms settle for format/mode transitions
+                    }
+                } else if (angle_sync_delay > 0U) {
+                    if (--angle_sync_delay == 0U) {
+                        trigger_shutter_angle_apply();
+                    }
+                }
+            } else {
+                last_angle_sys = cur_sys;
+                angle_sync_delay = 0U;
+            }
+        }
 
         // SYSTEM_MODE_PLAY_STILL (4) + SYSTEM_MODE_OPTION_MASS_STORAGE_MTP (2) == USB Mass Storage
         if (cur_sys == 4U && cur_opt == 2U) {

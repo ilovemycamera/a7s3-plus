@@ -3,15 +3,19 @@
 static char maps[131072];
 static uint8_t uxc_buf[163840];
 
-static long sc5(long n, long a, long b, long c, long d, long e) {
+static long sc6(long n, long a, long b, long c, long d, long e, long f) {
     register long x0 __asm__("x0") = a;
     register long x1 __asm__("x1") = b;
     register long x2 __asm__("x2") = c;
     register long x3 __asm__("x3") = d;
     register long x4 __asm__("x4") = e;
+    register long x5 __asm__("x5") = f;
     register long x8 __asm__("x8") = n;
-    __asm__ volatile("svc 0" : "+r"(x0) : "r"(x1), "r"(x2), "r"(x3), "r"(x4), "r"(x8) : "memory", "cc");
+    __asm__ volatile("svc 0" : "+r"(x0) : "r"(x1), "r"(x2), "r"(x3), "r"(x4), "r"(x5), "r"(x8) : "memory", "cc");
     return x0;
+}
+static long sc5(long n, long a, long b, long c, long d, long e) {
+    return sc6(n, a, b, c, d, e, 0);
 }
 static long sc4(long n, long a, long b, long c, long d) {
     return sc5(n, a, b, c, d, 0);
@@ -136,6 +140,57 @@ static void unlock_cap_table(uint64_t base, uint32_t cap_va, uint32_t count, uin
     for (uint32_t i = 0; i <= count; ++i) {
         *reinterpret_cast<volatile uint8_t *>(base + bss_va + i) = 1;
     }
+}
+static void writable_range(uint64_t base, uint32_t va, uint32_t len, int prot) {
+    uint64_t p0 = (base + va) & ~0xfffUL;
+    uint64_t p1 = (base + va + len + 0xfffUL) & ~0xfffUL;
+    sc4(226, (long)p0, (long)(p1 - p0), prot, 0);
+}
+static void unlock_leaf_clean(uint64_t base, uint32_t lva, int force_vis, int force_act) {
+    writable_range(base, lva, 0xc0, 3);
+    *reinterpret_cast<volatile uint32_t *>(base + lva + 0x28) = 0x00010101;
+    for (int i = 0; i < 20; ++i)
+        *reinterpret_cast<volatile uint16_t *>(base + lva + 0x2c + i * 2) = 1;
+    if (force_vis) *reinterpret_cast<volatile uint64_t *>(base + lva + 0x70) = base + 0x1c5dd98;
+    if (force_act) *reinterpret_cast<volatile uint64_t *>(base + lva + 0xa8) = base + 0x1bdf304;
+}
+static void unlock_opt_range(uint64_t base, uint32_t ova, uint32_t count) {
+    writable_range(base, ova, count * 0x80, 7);
+    for (uint32_t i = 0; i < count; ++i) {
+        uint32_t o = ova + i * 0x80;
+        for (int m = 0; m < 20; ++m)
+            *reinterpret_cast<volatile uint16_t *>(base + o + 0x44 + m * 2) = 1;
+    }
+}
+static void unlock_cap_zero(uint64_t base, uint64_t sink, uint32_t cap_va, uint32_t count, uint32_t bss_va, uint32_t enable_mask) {
+    writable_range(base, cap_va, (count + 2) * 8, 3);
+    *reinterpret_cast<volatile uint64_t *>(base + cap_va) = sink;
+    for (uint32_t i = 0; i < count; ++i) {
+        *reinterpret_cast<volatile uint64_t *>(base + cap_va + 16 + i * 8) = sink;
+    }
+    // Sony appFw capability polarity: 0 = ENABLED/ACTIVE, 1 = DISABLED/GREYED OUT
+    *reinterpret_cast<volatile uint8_t *>(base + bss_va) = 0;
+    for (uint32_t i = 0; i < count; ++i) {
+        uint8_t disabled = (i < 32) ? (((enable_mask >> i) & 1U) ? 0 : 1) : 0;
+        *reinterpret_cast<volatile uint8_t *>(base + bss_va + 1 + i) = disabled;
+    }
+}
+static void activate_cache_entry(uint64_t base, uint32_t tbl, uint32_t id, int is_leaf, uint64_t opts_ptr) {
+    volatile uint8_t *e = reinterpret_cast<volatile uint8_t *>(base + tbl + (uint64_t)id * 0x18);
+    e[0] = 1;
+    e[1] = 0;
+    e[2] = 1;
+    e[3] = 0; // 0 = ACTIVE (not greyed out)
+    e[0x0c] = 1;
+    if (is_leaf) {
+        e[4] = 1;
+        if (opts_ptr) *reinterpret_cast<volatile uint64_t *>(e + 0x10) = opts_ptr;
+    }
+}
+static void activate_leaf_and_opts(uint64_t base, uint32_t lid, uint32_t oid0, uint32_t cnt) {
+    activate_cache_entry(base, 0x7597ea8, lid, 1, base + 0x75564e0 + (uint64_t)oid0 * 0x18);
+    for (uint32_t i = 0; i < cnt; ++i)
+        activate_cache_entry(base, 0x75564e0, oid0 + i, 0, 0);
 }
 static void replace_uxc_buf_at(uint8_t *buf, uint32_t off, uint32_t max_len, const char *str, int do_mprotect) {
     if (do_mprotect) {
@@ -620,27 +675,48 @@ extern "C" __attribute__((visibility("default"))) void _init(void) {
             *reinterpret_cast<volatile uint64_t *>(base + 0x50819b0) = base + 0x1bdf304;
             *reinterpret_cast<volatile uint64_t *>(base + 0x50819b8) = base + 0x1bdf304;
 
-            const uint32_t log_pointers[] = {0x54f8a68, 0x54f8a78, 0x54f8a80, 0x54f8a88, 0x54f8a90};
-            for (uint32_t ptr : log_pointers) {
-                writable(base, ptr, 3);
-                *reinterpret_cast<volatile uint64_t *>(base + ptr) = base + 0x7f834cf;
-            }
-            *reinterpret_cast<volatile uint32_t *>(base + 0x7f834cc) = 0x01010101;
-            *reinterpret_cast<volatile uint16_t *>(base + 0x7f834d0) = 0x0101;
+            // Permanent 4KB anonymous sink page for capability/lock writer redirection
+            long sink_raw = sc6(222 /* mmap */, 0, 4096, 3 /* RW */, 0x22 /* PRIVATE|ANON */, -1, 0);
+            uint64_t cap_sink = (sink_raw > 0) ? (uint64_t)sink_raw : (base + 0x7f834cf);
 
-            const uint32_t base_iso_pointers[] = {0x54ef398, 0x54ef3a8, 0x54ef3b0, 0x54ef3b8, 0x54ef3c0, 0x54ef3c8};
-            for (uint32_t ptr : base_iso_pointers) {
-                writable(base, ptr, 3);
-                *reinterpret_cast<volatile uint64_t *>(base + ptr) = base + 0x7f8511f;
-            }
-            *reinterpret_cast<volatile uint32_t *>(base + 0x7f8511c) = 0x01010101;
-            *reinterpret_cast<volatile uint16_t *>(base + 0x7f85120) = 0x0101;
+            // Cine EI / Cine EI Quick / Flexible ISO + Base ISO 800 & 12800 + Exposure Index (0 = ENABLED)
+            unlock_cap_zero(base, cap_sink, 0x54f8a68, 4,  0x7f834cc, 0x0000000fU); // Log Shooting (Off/Flex/CineEIQuick/CineEI)
+            unlock_cap_zero(base, cap_sink, 0x54ef398, 5,  0x7f8511c, 0x00000003U); // Base ISO (ISO 800 & ISO 12800 only)
+            unlock_cap_zero(base, cap_sink, 0x550dfc8, 27, 0x7f85144, 0x00007f00U); // Base ISO Switch EI (1000..4000 EI, ev 8..14)
+            unlock_cap_zero(base, cap_sink, 0x5540e50, 27, 0x7f8517c, 0x03fffffeU); // Exposure Index (Cine EI Quick: 200..51200 EI, ev 1..25)
+            unlock_cap_zero(base, cap_sink, 0x553b0d8, 27, 0x7f851b4, 0x00003ffeU); // Exposure Index (Base ISO 800: 200..3200 EI, ev 1..13)
+            unlock_cap_zero(base, cap_sink, 0x5540f38, 27, 0x7f851ec, 0x03ffe000U); // Exposure Index (Base ISO 12800: 3200..51200 EI, ev 13..25)
+            unlock_cap_zero(base, cap_sink, 0x5526908, 3,  0x7f85244, 0x00000003U); // Base ISO sensitivity display
 
-            for (uint32_t ptr = 0x550dfc8; ptr <= 0x550e068; ptr += 8) {
-                writable(base, ptr, 3);
-                *reinterpret_cast<volatile uint64_t *>(base + ptr) = base + 0x7f85147;
-            }
-            *reinterpret_cast<volatile uint32_t *>(base + 0x7f85144) = 0x01010101;
+            // Unlock Exposure Index menu leaves (preserve native dynamic visibility +0x70)
+            unlock_leaf_clean(base, 0x5893f78, 0, 0); // EI_auto (lid 0x1c6, n=26)
+            unlock_opt_range(base, 0x3fb0c38, 26);
+            unlock_leaf_clean(base, 0x588f318, 0, 0); // EI_low  (lid 0x1c7, n=14)
+            unlock_opt_range(base, 0x3fadcb8, 14);
+            unlock_leaf_clean(base, 0x5894038, 0, 0); // EI_high (lid 0x1c8, n=20)
+            unlock_opt_range(base, 0x3fb1938, 20);
+
+            // Shutter Mode (Speed / Angle) + Shutter Angle (29 angles: 64F..2F, 360.0..5.6)
+            unlock_leaf_clean(base, 0x5856b98, 1, 0); // Shutter Mode (lid 0x1b9, n=2)
+            unlock_opt_range(base, 0x3f597b8, 2);
+            unlock_leaf_clean(base, 0x585ae08, 1, 0); // Angle (lid 0x1bb, n=29)
+            unlock_opt_range(base, 0x3f5d9b8, 29);
+            unlock_cap_zero(base, cap_sink, 0x54f8ab8, 2,  0x7f84f2c, 0x00000003U); // Shutter Mode (Speed & Angle)
+            unlock_cap_zero(base, cap_sink, 0x54fb488, 29, 0x7f84fb4, 0x1fffffffU); // Angle (all 29 options)
+
+            // Unlock Shutter Angle dial & +/- step locks (0x8455f39, 0x8455f3c, 0x8455f3d)
+            writable_range(base, 0x5419240, 0x40, 3);
+            *reinterpret_cast<volatile uint64_t *>(base + 0x5419248) = cap_sink + 8;
+            *reinterpret_cast<volatile uint64_t *>(base + 0x5419260) = cap_sink + 8;
+            *reinterpret_cast<volatile uint64_t *>(base + 0x5419268) = cap_sink + 8;
+            *reinterpret_cast<volatile uint8_t *>(base + 0x8455f39) = 0;
+            *reinterpret_cast<volatile uint8_t *>(base + 0x8455f3c) = 0;
+            *reinterpret_cast<volatile uint8_t *>(base + 0x8455f3d) = 0;
+
+            // Unlock the 7 hidden Aspect Marker options (9:16, 4:5, 1:1, 17:9, 1.91:1, 2:1, 2.39:1)
+            // on the existing stock Aspect Marker leaf (0x584d0f8, lid 0x1a4) without enabling duplicate lid 0x1a5.
+            unlock_opt_range(base, 0x3f8d038, 16);
+            unlock_cap_zero(base, cap_sink, 0x55223a8, 17, 0x7f84cd4, 0x0001ffffU);
 
             const uint32_t still_log_pointers[] = {0x550f058, 0x550f068, 0x550f070, 0x550f078, 0x550f080};
             for (uint32_t ptr : still_log_pointers) {
@@ -650,7 +726,7 @@ extern "C" __attribute__((visibility("default"))) void _init(void) {
             *reinterpret_cast<volatile uint32_t *>(base + 0x7f83534) = 0x01010101;
 
             // Capability tables for newly unlocked Cinema Line / Alpha 1 / FX3 features
-            unlock_cap_table(base, 0x54fdf28, 3, 0x7f83514); // Embed LUT File
+            unlock_cap_zero(base, cap_sink, 0x54fdf28, 3, 0x7f83514, 0x00000003U); // Embed LUT File (On / Off)
             unlock_cap_table(base, 0x5502e18, 4, 0x7f88c74); // Video Light Mode
             unlock_cap_table(base, 0x55144c8, 7, 0x7f888b4); // 4ch Audio Monitoring
             unlock_cap_table(base, 0x54fab30, 2, 0x7f88bd4); // 4ch Audio Output
@@ -756,6 +832,31 @@ extern "C" __attribute__((visibility("default"))) void _init(void) {
             cache_entry(base, 0x75564e0, 0xccb);
             cache_entry(base, 0x75564e0, 0x470)[3] = 0;
             cache_entry(base, 0x75564e0, 0x471)[3] = 0;
+
+            // Active cache entries (entry[3]=0) for Cine EI, Base ISO 800/12800, Exposure Index,
+            // Embed LUT File, Shutter Mode, Shutter Angle, and all 16 stock Aspect Marker options.
+            activate_leaf_and_opts(base, 0x09c, 0x244, 5);   // Log Shooting
+            activate_leaf_and_opts(base, 0x09e, 0x24c, 3);   // Embed LUT File
+            activate_cache_entry(base, 0x7597ea8, 0x1c4, 1, base + 0x75564e0 + 0x71b * 0x18); // Base ISO
+            activate_cache_entry(base, 0x75564e0, 0x71b, 0, 0); // ISO 800
+            activate_cache_entry(base, 0x75564e0, 0x71e, 0, 0); // ISO 12800
+            // Keep FX30/FX6 base ISOs (2500/4000) hidden
+            reinterpret_cast<volatile uint8_t *>(base + 0x75564e0 + 0x71c * 0x18)[2] = 0;
+            reinterpret_cast<volatile uint8_t *>(base + 0x75564e0 + 0x71c * 0x18)[0x0c] = 0;
+            reinterpret_cast<volatile uint8_t *>(base + 0x75564e0 + 0x71d * 0x18)[2] = 0;
+            reinterpret_cast<volatile uint8_t *>(base + 0x75564e0 + 0x71d * 0x18)[0x0c] = 0;
+            activate_leaf_and_opts(base, 0x1c5, 0x720, 7);   // Base ISO Switch EI
+            activate_leaf_and_opts(base, 0x1c6, 0x727, 26);  // Exposure Index (Cine EI Quick)
+            activate_leaf_and_opts(base, 0x1c7, 0x741, 14);  // Exposure Index (Base ISO 800)
+            activate_leaf_and_opts(base, 0x1c8, 0x74f, 20);  // Exposure Index (Base ISO 12800)
+            activate_leaf_and_opts(base, 0x1b9, 0x607, 2);   // Shutter Mode (Speed / Angle)
+            activate_leaf_and_opts(base, 0x1bb, 0x652, 29);  // Angle (64F..2F, 360.0..5.6)
+            for (uint32_t oid = 0x5c7; oid <= 0x5d6; ++oid)  // All 16 Aspect Markers on stock lid 0x1a4
+                activate_cache_entry(base, 0x75564e0, oid, 0, 0);
+            // Ensure duplicate Aspect Marker leaf (0x1a5) stays hidden
+            reinterpret_cast<volatile uint8_t *>(base + 0x7597ea8 + 0x1a5 * 0x18)[2] = 0;
+            reinterpret_cast<volatile uint8_t *>(base + 0x7597ea8 + 0x1a5 * 0x18)[0x0c] = 0;
+
             cache_entry(base, 0x75564e0, 0x8d);
             for (uint32_t oid = 0xc8; oid <= 0xd1; ++oid)
                 cache_entry(base, 0x75564e0, oid);

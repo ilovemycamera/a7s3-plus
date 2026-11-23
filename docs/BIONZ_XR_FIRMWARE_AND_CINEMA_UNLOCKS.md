@@ -77,7 +77,29 @@ The FX3/FX30 **BIG6 Cinema Home Screen** ships dormant inside A7S III `5.01` and
 
 ---
 
-## 4. `BKID_*` Persistent Settings Catalog & USB Research Bench
+## 4. Hardware Shutter Angle, Cine EI / EI Wheel, Embed LUT & Aspect Markers (`v26`)
+
+### Sony `appFw.so` Capability Polarity & Leaf Mode Slots
+- **Capability Polarity (`0 = ENABLED`, `1 = DISABLED`):** Across `appFw.so` capability structs (`+0x14` overall leaf flag, `+0x15 + ev` per-option flag) and menu cache entries (`0x7597ea8 + lid * 0x18`, byte `[3]`), **`0` means active/enabled** and **`1` means disabled/greyed out**. `menu_repair.cpp` allocates a permanent 4 KB anonymous `mmap` sink page (`cap_sink`) and redirects capability writer pointers into it via `unlock_cap_zero()` while writing the desired `0/1` enable mask into the live `.bss` capability bytes.
+- **20-Slot Leaf Visibility Array:** Every menu leaf record holds `20 × u16` mode-visibility entries at `lva + 0x2c..+0x53` (indices `18–19` at `+0x50..+0x53` cover Movie mode — updating only 18 entries hides the item in Movie mode after a cold reboot).
+
+### Hardware Shutter Angle (`PID 0x401c`)
+Cross-body analysis of `cpapp-b.bin` shows that **A7S III `5.01` already contains the identical real-time CP `PID 0x401c` Shutter Angle handler** as FX3 `7.02` (`FW: SET_SHUT_DRIVE[drv=%d:sum=%d(up=%d):typ=%d:m=%d:c=%d:abs=%lu/%lu:f=%lu]`), and `No382_AutoIconforShutterspeed` already renders `180.0°` cleanly. Sony only stripped the `ShutterMode == 1` encoder branch out of `appFw.so @ 0x355bda0` and omitted the `0x3e03/0x3e04` wheel dataflow step nodes:
+1. **`hook_355bda0` (`runtime/og_menu_daemon.cpp`):** Exact port of FX3 `7.02 @ 0x2e1cad8` adapted for A7S III `sequence_set_shut_drive` (`0x34a46fc`), which packs `u16 shut_mode` at `in+0x0c` and `u16 angle` at `in+0x0e`. Encodes `msg[10] = 1` (Angle), `msg[11] = 1` (absolute `100 / ((fps_x100 * 360000) / angle_x1000)`) or `msg[11] = 2` (frame accumulation `64F..2F`), plus full S&Q (`cur_exp` mask `0x103e0000`) and clean `ShutterMode == 0` (Speed) pass-through.
+2. **`hook_26a6f4c` (`appFw + 0x26a6f4c`):** Intercepts physical shutter wheel rotation (`delta != 0`) and steps `Angle` (`0x7f84f98`) smoothly via Sony's native Angle setter `0x26a70ac`; when `delta == 0`, calls the original trampoline `call_orig_26a6f4c` followed by explicit `flush_seq_queue()` (`appFw + 0x24ef294`) so sequence `0x63` dispatches immediately.
+3. **Automatic FPS / S&Q / Mode Sync (`og_worker`):** Watches `ShutterMode` (`0x7f84f10`), `Angle` (`0x7f84f98`), `FileFormat` (`0x7f81c10`), all 8 Rec FPS words (`0x7f81c18..0x7f81d50`), S&Q FPS words (`0x7f82608/630/660`), `cur_sys`, and `cur_exp`, firing `trigger_shutter_angle_apply()` after a ~180 ms settle delay (hardware-verified in `/tmp/jiritsu/vdf-log.txt`: e.g. `90.0° @ 50p -> 100/20000` vs `90.0° @ 25p -> 100/10000`).
+
+### Cine EI / Cine EI Quick / Base ISO `800 & 12800` / Exposure Index & ISO Wheel
+- `sequence_set_iso_speed_rate` (`0x34872a8`), `PID 0x4029` (`0x355c404`), `VDF CMD 0x015f` (`0x35224bc`), and `vdf_set_ei_gain` (`VDF CMD 0x0134` @ `0x3522314`) are **100% native** in A7S III `5.01` once `Log Shooting` (`lid 0x09c`, `0x5856ad8`) passes `FeatureManager(0x9c)` (`0x2e76c78 -> 0x1bdece8`).
+- `menu_repair.cpp` unlocks `Log Shooting` (`Off / Flexible ISO / Cine EI Quick / Cine EI`), `Base ISO` (`ISO 800 & ISO 12800` only, keeping FX30 `2500` & FX6 `4000` hidden), `Base ISO Switch EI` (`1000–4000 EI`, `ev 8..14`), and exact FX3 `±2 EV` Exposure Index ranges (`EI_auto` `200–51200 EI`, `EI_low` `200–3200 EI`, `EI_high` `3200–51200 EI`), plus `Embed LUT File` (`0x54fdf28` / `0x7f83514`).
+- **Physical ISO/EI Wheel Fix (`og_menu_daemon.cpp`):** Just like Shutter Angle (`0x3e03/0x3e04`), A7S III stripped dataflow step nodes `0x4046..0x404b` for the 6 ISO-wheel EI steppers (`0x26cb554/644`, `0x26c9820/910`, `0x26c9b94/c84`). `og_menu_daemon.cpp` hooks all 6 directly onto Sony's intact menu setters (`0x26cb460`, `0x26c972c`, `0x26c9aa0`) + `flush_seq_queue()` (`0x24ef294`).
+
+### Full 16-Ratio Aspect Markers (Single Menu Entry)
+- Stock A7S III `5.01` already exposes `Aspect Marker` leaf `lid 0x1a4` (`0x584d0f8`) sharing the 16-entry option table `0x3f8d038` (`oid 0x5c7..0x5d6`) with gated Cinema Line leaf `lid 0x1a5` (`0x584e880`). Unlocking only the 7 gated ratios in `0x3f8d038` + capability table `0x55223a8` (`0x7f84cd4`) while keeping `lid 0x1a5` hidden enables all 16 aspect markers (`9:16`, `4:5`, `1:1`, `17:9`, `1.91:1`, `2:1`, `2.39:1`, …) with zero duplicate menu items.
+
+---
+
+## 5. `BKID_*` Persistent Settings Catalog & USB Research Bench
 
 Sony stores persistent camera parameters in Backup NVRAM indexed by 32-bit `BKID` identifiers (`0x02cf0000 + id_low16` in the app settings zone). Static extraction of `{u64 name_ptr, u32 id_low16, u32 len}` records from `appFw.so` is included in [`analysis/bkid_catalog.csv`](../analysis/bkid_catalog.csv) (`116` verified `VA <-> id_low16 <-> BKID_APP_*` entries out of `~6,625` `BKID_*` strings in `appFw.so`).
 
