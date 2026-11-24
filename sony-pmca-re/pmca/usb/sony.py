@@ -9,7 +9,15 @@ from io import BytesIO
 try:
  from Cryptodome.Hash import SHA256
 except ImportError:
- from Crypto.Hash import SHA256
+ try:
+  from Crypto.Hash import SHA256
+ except ImportError:
+  import hashlib as _hashlib
+
+  class SHA256:
+   @staticmethod
+   def new(data=b''):
+    return _hashlib.sha256(data)
 
 from . import *
 from . import constants, crypto

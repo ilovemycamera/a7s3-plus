@@ -2,27 +2,37 @@
 set -euo pipefail
 
 DIR="$(cd "$(dirname "$0")" && pwd)"
-export DYLD_FALLBACK_LIBRARY_PATH="$DIR/vendor:/opt/homebrew/lib:/usr/local/lib:${DYLD_FALLBACK_LIBRARY_PATH:-}"
+export DYLD_FALLBACK_LIBRARY_PATH="$DIR/vendor:/opt/homebrew/lib:/usr/local/lib:/opt/local/lib:${DYLD_FALLBACK_LIBRARY_PATH:-}"
+
+python_ready() {
+    "$1" -c 'import sys; sys.path[:0] = sys.argv[1:3]; import usb.core; from pmca.commands.usb import senserShellCommand' \
+        "$DIR/vendor" "$DIR/sony-pmca-re" >/dev/null 2>&1
+}
 
 choose_python() {
-    if [ -x "$DIR/.venv/bin/python" ] && "$DIR/.venv/bin/python" -c "import sys; sys.path.insert(0, '$DIR/vendor'); import usb.core" >/dev/null 2>&1; then
+    if [ -x "$DIR/.venv/bin/python" ] && python_ready "$DIR/.venv/bin/python"; then
         PY="$DIR/.venv/bin/python"
         return
     fi
-    if command -v python3 >/dev/null 2>&1 && python3 -c "import sys; sys.path.insert(0, '$DIR/vendor'); import usb.core" >/dev/null 2>&1; then
+    if command -v python3 >/dev/null 2>&1 && python_ready "$(command -v python3)"; then
         PY="$(command -v python3)"
         return
     fi
-    echo "=== Creating local .venv and installing pyusb ==="
+    echo "=== Creating local .venv and installing Python dependencies (pyusb) ==="
     rm -rf "$DIR/.venv"
     python3 -m venv "$DIR/.venv"
-    "$DIR/.venv/bin/pip" install --upgrade pip pyusb
+    "$DIR/.venv/bin/pip" install --upgrade pip
+    "$DIR/.venv/bin/pip" install -r "$DIR/requirements.txt"
     PY="$DIR/.venv/bin/python"
 }
 
 # Verify libusb is reachable on macOS before prompting for sudo
 if [ "$(uname -s)" = "Darwin" ]; then
-    if [ ! -f "$DIR/vendor/libusb-1.0.dylib" ] && [ ! -f "/opt/homebrew/lib/libusb-1.0.dylib" ] && [ ! -f "/usr/local/lib/libusb-1.0.dylib" ]; then
+    HAS_VENDOR_LIBUSB=0
+    if [ "$(uname -m)" = "arm64" ] && [ -f "$DIR/vendor/libusb-1.0.dylib" ]; then
+        HAS_VENDOR_LIBUSB=1
+    fi
+    if [ "$HAS_VENDOR_LIBUSB" -eq 0 ] && [ ! -f "/opt/homebrew/lib/libusb-1.0.dylib" ] && [ ! -f "/usr/local/lib/libusb-1.0.dylib" ] && [ ! -f "/opt/local/lib/libusb-1.0.dylib" ]; then
         echo "ERROR: libusb not found. Install it via Homebrew first:"
         echo "  brew install libusb"
         exit 1

@@ -3,7 +3,10 @@ import io
 from xml.dom import minidom
 
 from .backend import *
-from ..apk import *
+try:
+ from ..apk import *
+except ImportError:
+ pass
 
 class AndroidInterface:
  def __init__(self, backend):

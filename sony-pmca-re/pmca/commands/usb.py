@@ -8,12 +8,7 @@ import struct
 import zipfile
 
 import config
-from ..apk import *
-from .. import appstore
-from .. import firmware
-from .. import installer
 from ..io import *
-from ..marketserver.server import *
 from ..platform import *
 from ..platform.backend.senser import *
 from ..platform.backend.usb import *
@@ -21,7 +16,32 @@ from ..usb import *
 from ..usb.driver import *
 from ..usb.driver.generic import *
 from ..usb.sony import *
-from ..util import http
+
+# Optional PlayMemories App/Market/Firmware modules (not required for Senser USB shell)
+try:
+ from ..apk import *
+except ImportError:
+ pass
+try:
+ from .. import appstore
+except ImportError:
+ appstore = None
+try:
+ from .. import firmware
+except ImportError:
+ firmware = None
+try:
+ from .. import installer
+except ImportError:
+ installer = None
+try:
+ from ..marketserver.server import *
+except ImportError:
+ pass
+try:
+ from ..util import http
+except ImportError:
+ http = None
 
 scriptRoot = getattr(sys, '_MEIPASS', os.path.dirname(__file__) + '/../..')
 

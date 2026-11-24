@@ -63,6 +63,7 @@ Want to know how everything works at the register, DMA, and instruction level?
   # macOS (Homebrew)
   brew install libusb
   ```
+  `./install_clean_camera.sh` automatically creates a local `.venv` and installs `requirements.txt` (`pyusb` on macOS/Linux — no `axmlparserpy` or extra PlayMemories packages required). If you run `analysis/*.py` manually without the shell launcher, install dependencies once via `pip install -r requirements.txt`.
 
 ### 2. Optional: Add `DOOM1.WAD` (for the in-menu DOOM Easter egg)
 For copyright reasons, **no WAD game data is included in this repository**.

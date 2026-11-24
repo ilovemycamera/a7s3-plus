@@ -13,8 +13,11 @@ Usage (host needs sudo for USB; password comes from BENCH_SUDO_PASS or a prompt)
     sudo -E .venv/bin/python analysis/stand.py hooks
 """
 import argparse
+import ctypes.util
 import getpass
+import platform
 import secrets
+import shutil
 import subprocess
 import sys
 import time
@@ -26,6 +29,26 @@ for sp in (ROOT / '.venv/lib').glob('python*/site-packages'):
 if (ROOT / 'vendor').exists():
     sys.path.insert(0, str(ROOT / 'vendor'))
 sys.path.insert(0, str(ROOT / 'sony-pmca-re'))
+
+_VENDOR_LIBUSB = ROOT / 'vendor' / 'libusb-1.0.dylib'
+if sys.platform == 'darwin' and platform.machine() == 'arm64' and _VENDOR_LIBUSB.is_file():
+    _orig_find_library = ctypes.util.find_library
+
+    def _find_library_with_vendor(name):
+        res = _orig_find_library(name)
+        if res:
+            return res
+        if name and 'usb-1.0' in name:
+            for candidate in (
+                '/opt/homebrew/lib/libusb-1.0.dylib',
+                '/usr/local/lib/libusb-1.0.dylib',
+                str(_VENDOR_LIBUSB),
+            ):
+                if Path(candidate).is_file():
+                    return candidate
+        return None
+
+    ctypes.util.find_library = _find_library_with_vendor
 
 CATEGORY = 0x1001
 SET_PATH = 0x400F
@@ -39,6 +62,8 @@ NONCE = secrets.token_hex(4)
 
 
 def unmount_pmhome():
+    if sys.platform != 'darwin' or not shutil.which('diskutil'):
+        return
     out = subprocess.run(['diskutil', 'list', 'external'], capture_output=True, text=True).stdout
     for line in out.splitlines():
         if line.startswith('/dev/disk'):
