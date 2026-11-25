@@ -12,7 +12,7 @@ sys.path.insert(0, str(ROOT / 'sony-pmca-re'))
 sys.path.insert(0, str(ROOT / 'analysis'))
 
 from pmca.commands.usb import senserShellCommand
-from stand import unmount_pmhome
+from stand import ensure_jiritsu_mounted, unmount_pmhome
 
 CATEGORY = 0x1001
 SET_PATH = 0x400F
@@ -21,6 +21,7 @@ GET_FILE2 = 0x4011
 
 def complete(camera):
     camera.readHasp()
+    ensure_jiritsu_mounted(camera)
     for remote in sys.argv[1:]:
         camera._sendAdjustControlPacket(CATEGORY, SET_PATH, b'\x00' + remote.encode() + b'\x00')
         response = camera._sendAdjustControlPacket(CATEGORY, GET_FILE2, b'\x00\xff\x00')

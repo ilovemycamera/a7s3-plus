@@ -51,6 +51,7 @@ if sys.platform == 'darwin' and platform.machine() == 'arm64' and _VENDOR_LIBUSB
     ctypes.util.find_library = _find_library_with_vendor
 
 CATEGORY = 0x1001
+JIRITSU_MOUNT = 0x0002
 SET_PATH = 0x400F
 SET_FILE2 = 0x4010
 GET_FILE2 = 0x4011
@@ -59,6 +60,37 @@ LIBJIT = BASE + 'libJit.so'
 REQUEST = BASE + 'a7c2-exec.request'
 PAYLOAD = (ROOT / 'analysis/reference/libjit_exec.so').read_bytes()
 NONCE = secrets.token_hex(4)
+
+JIRITSU_ERRORS = {
+    0x10000004: 'mount /dev/nflasha6 -> /tmp/jiritsu failed',
+    0x10000008: 'file open failed on camera',
+    0x10000009: 'short file write on camera',
+    0x1000000d: 'mkdir /tmp/jiritsu failed',
+    0x1000000f: '/tmp/jiritsu partition full (>24 MiB)',
+    0x10000015: 'DMM buffer alloc failed (set camera to idle Movie mode, close menu/playback)',
+    0x1000001c: 'parent directory creation failed',
+    0x10000201: 'invalid Jiritsu parameter',
+}
+
+
+def format_jiritsu_status(raw: bytes) -> str:
+    if not raw or len(raw) < 4:
+        return raw.hex() if raw else 'empty'
+    code = int.from_bytes(raw[:4], 'little')
+    hint = JIRITSU_ERRORS.get(code)
+    return f'0x{code:08x} ({hint})' if hint else f'0x{code:08x}'
+
+
+def ensure_jiritsu_mounted(camera):
+    """Create /tmp/jiritsu and mount /dev/nflasha6 (required on untouched stock cameras)."""
+    try:
+        res = call(camera, JIRITSU_MOUNT, b'\x00\x00')[:4]
+    except Exception as exc:
+        print(f'note: JIRITSU_MOUNT(0,0) skipped ({exc})')
+        return None
+    if res != b'\x00\x00\x00\x00':
+        print(f'note: JIRITSU_MOUNT(0,0) -> {format_jiritsu_status(res)}')
+    return res
 
 
 def unmount_pmhome():
@@ -104,12 +136,16 @@ def select(camera, path):
 def read_file(camera, path, limit=8_000_000):
     select(camera, path)
     response = call(camera, GET_FILE2, b'\x00\xff\x00')
+    read_file._last_status = response[:4]
     if response[:4] != b'\x00\x00\x00\x00':
         return None
     data = response[4:]
     if len(data) > limit:
         raise RuntimeError(f'oversized response for {path}: {len(data)}')
     return data
+
+
+read_file._last_status = b''
 
 
 def write_file(camera, path, data):
@@ -128,14 +164,23 @@ def run_script(camera, script, wait=4.0):
     payload = script.encode('ascii', 'replace')
     if len(payload) >= 2048:
         raise RuntimeError(f'script too long for libjit_exec REQUEST_MAX=2048 ({len(payload)} bytes)')
-    write_file(camera, BASE + 'a7c2-exec.start', b'A7JIT000 pending\n')
-    write_file(camera, BASE + 'a7c2-exec.status', b'A7JIT000 pending\n')
-    write_file(camera, REQUEST, payload)
-    if read_file(camera, REQUEST, 200_000) != payload:
-        raise RuntimeError('request readback mismatch')
+    r_start = write_file(camera, BASE + 'a7c2-exec.start', b'A7JIT000 pending\n')
+    r_stat = write_file(camera, BASE + 'a7c2-exec.status', b'A7JIT000 pending\n')
+    r_req = write_file(camera, REQUEST, payload)
+    if r_req != b'\x00\x00\x00\x00':
+        raise RuntimeError(
+            f'write REQUEST failed: {format_jiritsu_status(r_req)} '
+            f'(start={format_jiritsu_status(r_start)}, status={format_jiritsu_status(r_stat)})'
+        )
+    rb = read_file(camera, REQUEST, 200_000)
+    if rb != payload:
+        raise RuntimeError(
+            f'request readback mismatch (wrote {len(payload)}B, read {None if rb is None else len(rb)}B, '
+            f'get_status={format_jiritsu_status(read_file._last_status)})'
+        )
     result = write_file(camera, LIBJIT, PAYLOAD)
     if result != b'\x00\x00\x00\x00':
-        raise RuntimeError(f'libJit write/dlopen failed: {result.hex()}')
+        raise RuntimeError(f'libJit write/dlopen failed: {format_jiritsu_status(result)}')
     time.sleep(wait)
     start = read_file(camera, BASE + 'a7c2-exec.start')
     status = read_file(camera, BASE + 'a7c2-exec.status')
@@ -211,6 +256,7 @@ def build_bksweep(lo, hi):
 
 def complete(camera):
     camera.readHasp()
+    ensure_jiritsu_mounted(camera)
     if read_file(camera, '/tmp/jbusy') is not None:
         raise RuntimeError('/tmp/jbusy exists; camera busy, refusing')
 

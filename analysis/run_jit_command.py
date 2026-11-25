@@ -14,7 +14,7 @@ sys.path.insert(0, str(ROOT / 'sony-pmca-re'))
 sys.path.insert(0, str(ROOT / 'analysis'))
 
 from pmca.commands.usb import senserShellCommand
-from stand import unmount_pmhome
+from stand import ensure_jiritsu_mounted, format_jiritsu_status, unmount_pmhome
 
 CATEGORY = 0x1001
 SET_PATH = 0x400F
@@ -61,6 +61,7 @@ def write_file(camera, path, data):
 
 def complete(camera):
     camera.readHasp()
+    ensure_jiritsu_mounted(camera)
     if read_file(camera, '/tmp/jbusy') is not None:
         raise RuntimeError('/tmp/jbusy exists; refusing to write')
     script = COMMAND
@@ -72,7 +73,9 @@ def complete(camera):
         raise RuntimeError('command is too long (max 1800 bytes)')
     write_file(camera, START, b'A7JITE00 pending\n')
     write_file(camera, STATUS, b'A7JIT000 pending\n')
-    write_file(camera, REQUEST, script_bytes)
+    r_req = write_file(camera, REQUEST, script_bytes)
+    if r_req != b'\x00\x00\x00\x00':
+        raise RuntimeError(f'write REQUEST failed: {format_jiritsu_status(r_req)}')
     if read_file(camera, REQUEST) != script_bytes:
         raise RuntimeError('request readback mismatch')
     result = write_file(camera, LIBJIT, PAYLOAD)
